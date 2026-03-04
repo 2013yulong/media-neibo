@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🚀电子烟花</title>
+  <style>
+    html,body{height:100%;margin:0;background:radial-gradient(ellipse at center,#05070b 0%,#000 70%);}
+    #app{position:fixed;inset:0;}
+    #overlay{position:fixed;left:12px;bottom:12px;color:#aab;font:12px/1.6 system-ui,Segoe UI,Arial;opacity:.85;user-select:none}
+    #overlay b{color:#fff}
+    #overlay .kbd{padding:2px 6px;border:1px solid #556;border-radius:4px;margin-right:6px}
+  </style>
+  <script src="three-0.158.0-build-three.min.js.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<div id="overlay"><span class="kbd">Space</span> 新烟花 · <span class="kbd">DoubleClick</span> 暂停/继续 · 更真实的拖尾/烟雾/闪光</div>
+<script>
+(function(){
+  const app = document.getElementById('app');
+// 全屏按钮（动态创建，避免修改 HTML 结构）
+const fsBtn = document.createElement('button');
+fsBtn.id = 'fsBtn';
+fsBtn.textContent = '全屏';
+Object.assign(fsBtn.style, {
+  position:'fixed', right:'12px', top:'12px', padding:'8px 12px',
+  color:'#fff', background:'rgba(30,30,40,0.5)', border:'1px solid #556',
+  borderRadius:'6px', cursor:'pointer', zIndex:'10', backdropFilter:'blur(4px)'
+});
+fsBtn.onmouseenter = ()=> fsBtn.style.background = 'rgba(70,70,100,0.55)';
+fsBtn.onmouseleave = ()=> fsBtn.style.background = 'rgba(30,30,40,0.5)';
+document.body.appendChild(fsBtn);
+function isFS(){ return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement; }
+function updateFs(){ fsBtn.textContent = isFS() ? '退出全屏' : '全屏'; }
+fsBtn.addEventListener('click', (e)=>{
+  e.stopPropagation();
+  try{ if(window.__fwAudio) window.__fwAudio.unlock(); }catch(_){}
+  const elem = document.documentElement;
+  if(!isFS()){
+    const req = elem.requestFullscreen || elem.webkitRequestFullscreen || elem.mozRequestFullScreen || elem.msRequestFullscreen;
+    if(req) req.call(elem, { navigationUI: 'hide' });
+  }else{
+    const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+    if(exit) exit.call(document);
+  }
+});
+document.addEventListener('fullscreenchange', updateFs);
+document.addEventListener('webkitfullscreenchange', updateFs);
+document.addEventListener('mozfullscreenchange', updateFs);
+document.addEventListener('MSFullscreenChange', updateFs);
+updateFs();
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.autoClear = true;
+  app.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 5000);
+  camera.position.set(0, 60, 180);
+
+  const hemi = new THREE.HemisphereLight(0x334455, 0x000000, 0.6);
+  scene.add(hemi);
+  const ambient = new THREE.AmbientLight(0x222233, 0.6);
+  scene.add(ambient);
+
+  // 全流程亮度可配置（发射/爆炸/下落）
+  // 通过曝光与场景光源缩放达到整体亮度调节，并提供面板滑杆
+  window.__brightnessScale = window.__brightnessScale || 0.6;
+
+  // 启用色调映射，设置基础曝光
+  renderer.toneMapping = THREE.ReinhardToneMapping;
+  const BASE_EXPOSURE = 0.6;
+  renderer.toneMappingExposure = BASE_EXPOSURE;
+
+  // 记录基础光照，后续按比例缩放
+  const BASE_HEMI = hemi.intensity;
+  const BASE_AMBIENT = ambient.intensity;
+
+  function applyBrightness(){
+    const s = Math.max(0.2, Math.min(1.5, window.__brightnessScale));
+    renderer.toneMappingExposure = BASE_EXPOSURE * s;
+    hemi.intensity = BASE_HEMI * s;
+    ambient.intensity = BASE_AMBIENT * s;
+    renderer.domElement.style.filter = 'brightness(' + s + ')';
+  }
+  applyBrightness();
+
+  // 覆盖层添加“亮度”滑杆
+  (function(){
+    const overlay = document.getElementById('overlay');
+    if(!overlay) return;
+    const wrap = document.createElement('span');
+    wrap.style.marginLeft = '10px';
+
+    const label = document.createElement('b');
+    label.textContent = '亮度';
+    label.style.marginRight = '6px';
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = '0.2';
+    input.max = '1.5';
+    input.step = '0.01';
+    input.value = String(window.__brightnessScale);
+    input.style.verticalAlign = 'middle';
+
+    const val = document.createElement('span');
+    val.style.marginLeft = '6px';
+    val.textContent = String(window.__brightnessScale);
+
+    input.addEventListener('input', ()=>{
+      window.__brightnessScale = parseFloat(input.value) || 0.6;
+      val.textContent = input.value;
+      applyBrightness();
+    });
+
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+    wrap.appendChild(val);
+    overlay.appendChild(wrap);
+  })();
+
+  // 星空背景
+  const starGeo = new THREE.BufferGeometry();
+  const starCount = 1200;
+  const starPos = new Float32Array(starCount*3);
+  for(let i=0;i<starCount;i++){
+    const r = 1100;
+    const theta = Math.random()*Math.PI*2;
+    const phi = Math.acos(2*Math.random()-1);
+    starPos[i*3+0] = r*Math.sin(phi)*Math.cos(theta);
+    starPos[i*3+1] = r*Math.cos(phi);
+    starPos[i*3+2] = r*Math.sin(phi)*Math.sin(theta);
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos,3));
+  const starMat = new THREE.PointsMaterial({color:0x8899aa,size:1,transparent:true,opacity:0.6,depthWrite:false});
+  const stars = new THREE.Points(starGeo, starMat);
+  scene.add(stars);
+
+  // 地平线薄雾
+  const fog = new THREE.FogExp2(0x000000, 0.0011);
+  scene.fog = fog;
+
+  // 生成圆点纹理
+  function makeCircleTexture(size=128, color='#ffffff'){
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
+    grd.addColorStop(0, color);
+    grd.addColorStop(0.18, 'rgba(255,255,255,0.9)');
+    grd.addColorStop(0.6, 'rgba(255,255,255,0.28)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd;
+    g.fillRect(0,0,size,size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const spriteTex = makeCircleTexture(128,'#fff');
+
+  // 粒子着色器（真实感增强：阻力、湍流、全局风偏移、色温变化与辉光环）
+  const particleVertex = `
+  attribute vec3 aVelocity;
+  attribute float aStartTime;
+  attribute float aSize;
+  attribute vec3 aColor;
+  uniform float uTime;
+  uniform vec3 uGravity;
+  uniform float uFade;
+  uniform float uSparkle;
+  uniform float uTurbulence;
+  varying vec4 vColor;
+  void main(){
+    float t = max(uTime - aStartTime, 0.0);
+    // 空气阻力（指数衰减）
+    float drag = exp(-0.62 * t);
+    vec3 vel = aVelocity * drag;
+    vec3 pos = position + vel * t + 0.5 * uGravity * t * t;
+
+    // 全局高空气流偏移（近似风）：随时间缓慢漂移
+    pos.x += sin(uTime*0.55) * t * 0.9;
+    pos.z += cos(uTime*0.42) * t * 0.7;
+
+    // 局部湍流
+    float tw = uTurbulence;
+    pos += vec3(
+      sin(t*10.0 + position.x*3.7) * 0.14 * tw,
+      cos(t*12.0 + position.y*4.3) * 0.12 * tw,
+      sin(t*8.0  + position.z*2.9) * 0.14 * tw
+    );
+
+    // 闪烁
+    float spark = sin(t*52.0 + position.x*10.0 + position.y*7.0) * uSparkle;
+    float life = clamp(1.0 - t * uFade, 0.0, 1.0);
+    float size = aSize * (0.42 + 0.58*life) * (1.0 + 0.22*spark);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_PointSize = size * (330.0 / -mvPosition.z);
+    vColor = vec4(aColor, life);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+  `;
+  const particleFragment = `
+  precision mediump float;
+  varying vec4 vColor;
+  void main(){
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv)*2.0;
+    float alpha = smoothstep(1.0, 0.0, d) * vColor.a;
+    float core = smoothstep(0.12, 0.0, d);
+    float ring = smoothstep(0.9, 0.6, d) * 0.16;
+
+    // 色温变化：先偏白，再过渡到颜色，最后转暖（琥珀）
+    float inv = 1.0 - vColor.a;
+    vec3 warm = vec3(1.0, 0.78, 0.45);
+    vec3 col1 = mix(vec3(1.0), vColor.rgb, smoothstep(0.0, 0.35, inv));
+    vec3 col2 = mix(col1, warm, smoothstep(0.55, 1.0, inv));
+
+    vec3 col = col2 * (0.75 + 0.25*core) + vec3(1.0)*0.06*core;
+    col += vec3(1.0,0.9,0.7) * ring;
+    gl_FragColor = vec4(col, alpha);
+  }
+  `;
+
+  // 烟雾着色器：由内到外颜色渐变（浅→深），年龄驱动淡出
+  const smokeVertex = `
+  uniform float uTime;
+  uniform float uStart;
+  uniform float uSizeBase;
+  varying float vAge;
+  void main(){
+    float t = max(uTime - uStart, 0.0);
+    vAge = t;
+    vec3 pos = position;
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    float size = uSizeBase + min(t, 3.0) * 12.0;
+    gl_PointSize = size * (300.0 / -mvPosition.z);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+  `;
+  const smokeFragment = `
+  precision mediump float;
+  varying float vAge;
+  uniform vec3 uInnerColor;  // 内层（较浅偏暖）
+  uniform vec3 uMidColor;    // 中层（中性灰）
+  uniform vec3 uOuterColor;  // 外层（较深灰）
+  void main(){
+    vec2 uv = gl_PointCoord - 0.5;
+    float r = length(uv)*2.0;
+    // 颜色从中心浅暖 → 中性灰 → 外层更深
+    vec3 col = mix(uInnerColor, uMidColor, smoothstep(0.15, 0.55, r));
+    col = mix(col, uOuterColor, smoothstep(0.55, 1.0, r));
+    // 透明度：径向淡出 + 随年龄淡出
+    float radial = smoothstep(1.0, 0.0, r);
+    float ageAlpha = clamp(1.0 - vAge/3.0, 0.0, 1.0);
+    float alpha = radial * ageAlpha;
+    gl_FragColor = vec4(col, alpha);
+  }
+  `;
+
+  // 火箭类
+  class Firework {
+    constructor(){
+      this.state = 'ascending';
+      this.rocket = this.makeRocket();
+      this.trail = [];
+      this.startTime = performance.now()/1000;
+      this.launchPos = new THREE.Vector3((Math.random()-0.5)*140, 0, (Math.random()-0.5)*140);
+      this.targetAlt = 85 + Math.random()*95;
+      this.dir = new THREE.Vector3((Math.random()-0.5)*0.5, 1, (Math.random()-0.5)*0.5).normalize();
+      this.speed = 62 + Math.random()*46;
+      this.vel = this.dir.clone().multiplyScalar(this.speed);
+      this.gravity = new THREE.Vector3(0, -35, 0);
+      this.explosion = null;
+      this.explosionStart = 0;
+      this.type = ['sphere','ring','willow','palm','chrysanthemum'][Math.floor(Math.random()*5)];
+      this.palette = Firework.randomPalette();
+      this.smoke = null;
+      this.rocket.position.copy(this.launchPos);
+      scene.add(this.rocket);
+    }
+    static randomPalette(){
+      const palettes = [
+        [0xffcc33,0xff6633,0xff3366],
+        [0x66ccff,0x33aaff,0x99ddff],
+        [0x66ff66,0xccff66,0x99ff33],
+        [0xcc99ff,0x9966ff,0xff99ff],
+        [0xffff66,0xffcc99,0xff9999]
+      ];
+      return palettes[Math.floor(Math.random()*palettes.length)];
+    }
+    makeRocket(){
+      const geo = new THREE.ConeGeometry(1.6, 8, 16);
+      // 将几何体上移半个高度，使“底部”落在原点，避免圆锥尖常驻屏幕下缘
+      geo.translate(0, 4, 0);
+      const mat = new THREE.MeshBasicMaterial({color:0xffffff});
+      const mesh = new THREE.Mesh(geo, mat);
+      const tailLight = new THREE.PointLight(0xffaa55, 1.4, 42);
+      // 尾焰灯放在底部，避免随几何中心偏移导致位置不正确
+      tailLight.position.set(0, 0, 0);
+      mesh.add(tailLight);
+      return mesh;
+    }
+    addTrail(){
+      const vmag = this.vel.length();
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: spriteTex, color: 0xffaa55, blending: THREE.AdditiveBlending, transparent: true
+      }));
+      sprite.scale.set(6 + vmag*0.03, 6 + vmag*0.03, 6 + vmag*0.03);
+      sprite.material.opacity = 0.9 - Math.random()*0.35;
+      sprite.position.copy(this.rocket.position);
+      scene.add(sprite);
+      this.trail.push({sprite, born: performance.now()/1000});
+      for(let i=0;i<this.trail.length;i++){
+        const life = performance.now()/1000 - this.trail[i].born;
+        this.trail[i].sprite.material.opacity = Math.max(0, 1 - life*2.4);
+      }
+      if(this.trail.length>120){
+        const t = this.trail.shift();
+        scene.remove(t.sprite);
+        t.sprite.material.map.dispose();
+        t.sprite.material.dispose();
+      }
+    }
+    update(dt){
+      if(this.state==='ascending'){
+        this.vel.add(this.gravity.clone().multiplyScalar(dt*0.4));
+        const bx = 60, bz = 40, by = 120;
+this.rocket.position.add(this.vel.clone().multiplyScalar(dt));
+// 边界检测：若触达左右/前后/高度边界，立刻爆炸
+const clampedX = Math.max(-bx, Math.min(bx, this.rocket.position.x));
+const clampedZ = Math.max(-bz, Math.min(bz, this.rocket.position.z));
+const clampedY = Math.max(0, Math.min(by, this.rocket.position.y));
+const hitBoundary = (this.rocket.position.x !== clampedX) || (this.rocket.position.z !== clampedZ) || (this.rocket.position.y !== clampedY);
+// 回写位置
+this.rocket.position.set(clampedX, clampedY, clampedZ);
+if (hitBoundary) {
+  this.explode();
+  return true;
+}
+// 使火箭朝向与飞行方向一致（Cone 默认沿 +Y 轴为尖端）
+        {
+          const v = this.vel;
+          const sp = v.length();
+          if (sp > 0.001) {
+            const dir = v.clone().normalize();
+            const targetQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+            this.rocket.quaternion.slerp(targetQ, 0.35); // 平滑插值，避免抖动
+          }
+        }
+        this.addTrail();
+        // 摄像机轻微跟随
+        camera.position.x += (this.rocket.position.x*0.2 - camera.position.x)*0.02;
+        camera.position.z += (180 + this.rocket.position.z*0.1 - camera.position.z)*0.02;
+        camera.lookAt(new THREE.Vector3(0,40,0));
+        if(this.rocket.position.y>=this.targetAlt || this.vel.y<=0){
+          this.explode();
+        }
+      } else if(this.state==='exploding'){
+        // 粒子通过 shader 驱动；烟雾 CPU 驱动
+        // removed: this.updateSmoke(dt);
+        const t = performance.now()/1000 - this.explosionStart;
+        if(t>this.explodeDuration){
+          this.dispose();
+          return false;
+        }
+      }
+      return true;
+    }
+    explode(){
+      this.state='exploding';
+      scene.remove(this.rocket);
+      this.trail.forEach(t=>{scene.remove(t.sprite); t.sprite.material.dispose();});
+      this.trail.length=0;
+
+      const center = this.rocket.position.clone();
+// 屏幕安全范围约束，避免超出可视区域
+center.x = Math.max(-45, Math.min(45, center.x));
+center.z = Math.max(-30, Math.min(30, center.z));
+center.y = Math.max(75, Math.min(115, center.y));
+this.rocket.position.copy(center);
+      const count = 450 + Math.floor(Math.random()*950);
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(count*3);
+      const velocities = new Float32Array(count*3);
+      const startTimes = new Float32Array(count);
+      const sizes = new Float32Array(count);
+      const colors = new Float32Array(count*3);
+      const palette = this.palette;
+      const speedBase = 36 + Math.random()*36;
+      let sumSpeed = 0;
+      for(let i=0;i<count;i++){
+        positions[i*3+0]=center.x; positions[i*3+1]=center.y; positions[i*3+2]=center.z;
+        const col = new THREE.Color(palette[Math.floor(Math.random()*palette.length)]);
+        colors[i*3+0]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
+        sizes[i]= 6 + Math.random()*10;
+        startTimes[i] = Math.random()*0.22;
+        let v = new THREE.Vector3();
+        if(this.type==='sphere'){
+          v = Firework.randomDir().multiplyScalar(speedBase*(0.7+Math.random()*0.6));
+        }else if(this.type==='ring'){
+          const ang = Math.random()*Math.PI*2;
+          v.set(Math.cos(ang), 0.2*(Math.random()-0.5), Math.sin(ang)).normalize().multiplyScalar(speedBase*(0.8+Math.random()*0.4));
+        }else if(this.type==='willow'){
+          v = Firework.randomDir().multiplyScalar(speedBase*0.6*(0.5+Math.random())).add(new THREE.Vector3(0, -10*Math.random(), 0));
+          sizes[i]*=1.2;
+        }else if(this.type==='palm'){
+          const ang = Math.random()*Math.PI*2;
+          v.set(Math.cos(ang), 0.6+Math.random()*0.6, Math.sin(ang)).normalize().multiplyScalar(speedBase*1.1);
+          sizes[i]*=1.6;
+        }else{
+          v = Firework.randomDirChrysanthemum().multiplyScalar(speedBase*(0.8+Math.random()*0.6));
+        }
+        sumSpeed += v.length();
+        velocities[i*3+0]=v.x; velocities[i*3+1]=v.y; velocities[i*3+2]=v.z;
+      }
+      const avgSpeed = sumSpeed / count;
+      geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+      geo.setAttribute('aVelocity', new THREE.BufferAttribute(velocities,3));
+      geo.setAttribute('aStartTime', new THREE.BufferAttribute(startTimes,1));
+      geo.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
+      geo.setAttribute('aColor', new THREE.BufferAttribute(colors,3));
+      const mat = new THREE.ShaderMaterial({
+        uniforms:{
+          uTime:{value:0},
+          uGravity:{value:new THREE.Vector3(0,-24,0)},
+          uFade:{value:0.28},
+          uSparkle:{value:0.6},
+          uTurbulence:{value:0.18}
+        },
+        vertexShader: particleVertex,
+        fragmentShader: particleFragment,
+        blending: THREE.AdditiveBlending,
+        depthWrite:false,
+        transparent:true
+      });
+      const points = new THREE.Points(geo, mat);
+      scene.add(points);
+      this.explosion = {geo, mat, points};
+      try{ if(window.__fwAudio) window.__fwAudio.playExplosion(center, {radius: avgSpeed}); }catch(e){}
+
+      // 爆炸闪光（短暂）
+      const flash = new THREE.Sprite(new THREE.SpriteMaterial({map: spriteTex, color: 0xffffff, blending: THREE.AdditiveBlending, transparent: true, opacity: 0.9}));
+      flash.scale.set(160,160,160);
+      flash.position.copy(center);
+      scene.add(flash);
+      setTimeout(()=>{ flash.material.opacity=0; scene.remove(flash); flash.material.dispose(); }, 180);
+
+      // 生成烟雾
+      // 移除烟雾效果：不再创建烟雾\n// this.createSmoke(center);
+
+      this.explosionStart = performance.now()/1000;
+      this.explodeDuration = 4.6 + Math.random()*1.6;
+
+      // 二次爆炸（随机）
+      if(Math.random()<0.5){
+        setTimeout(()=>{
+          this.secondaryBurst(center);
+        }, 600+Math.random()*600);
+      }
+    }
+    secondaryBurst(center){
+      const count = 220 + Math.floor(Math.random()*320);
+      const geo = new THREE.BufferGeometry();
+      const positions = new Float32Array(count*3);
+      const velocities = new Float32Array(count*3);
+      const startTimes = new Float32Array(count);
+      const sizes = new Float32Array(count);
+      const colors = new Float32Array(count*3);
+      const palette = Firework.randomPalette();
+      const speedBase = 28 + Math.random()*22;
+      for(let i=0;i<count;i++){
+        positions[i*3+0]=center.x; positions[i*3+1]=center.y; positions[i*3+2]=center.z;
+        const col = new THREE.Color(palette[Math.floor(Math.random()*palette.length)]);
+        colors[i*3+0]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
+        sizes[i]= 5 + Math.random()*8;
+        startTimes[i] = Math.random()*0.2;
+        const ang = Math.random()*Math.PI*2;
+        const elev = (Math.random()*0.4-0.2);
+        const v = new THREE.Vector3(Math.cos(ang), elev, Math.sin(ang)).normalize().multiplyScalar(speedBase*(0.8+Math.random()*0.4));
+        velocities[i*3+0]=v.x; velocities[i*3+1]=v.y; velocities[i*3+2]=v.z;
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+      geo.setAttribute('aVelocity', new THREE.BufferAttribute(velocities,3));
+      geo.setAttribute('aStartTime', new THREE.BufferAttribute(startTimes,1));
+      geo.setAttribute('aSize', new THREE.BufferAttribute(sizes,1));
+      geo.setAttribute('aColor', new THREE.BufferAttribute(colors,3));
+      const mat = new THREE.ShaderMaterial({
+        uniforms:{
+          uTime:{value:0},
+          uGravity:{value:new THREE.Vector3(0,-18,0)},
+          uFade:{value:0.42},
+          uSparkle:{value:0.8},
+          uTurbulence:{value:0.25}
+        },
+        vertexShader: particleVertex,
+        fragmentShader: particleFragment,
+        blending: THREE.AdditiveBlending,
+        depthWrite:false,
+        transparent:true
+      });
+      const points = new THREE.Points(geo, mat);
+      scene.add(points);
+      this.secondary = {geo, mat, points, start: performance.now()/1000, dur: 3.5+Math.random()*1.0};
+      // 估算二次爆炸平均速度，用作半径映射
+      let sumSpeed2 = 0;
+      for(let i=0;i<count;i++){
+        const vx = velocities[i*3+0], vy = velocities[i*3+1], vz = velocities[i*3+2];
+        sumSpeed2 += Math.sqrt(vx*vx + vy*vy + vz*vz);
+      }
+      const avgSpeed2 = sumSpeed2 / count;
+      try{ if(window.__fwAudio) window.__fwAudio.playExplosion(center, {radius: avgSpeed2}); }catch(e){}
+    }
+    createSmoke(center){
+      const count = 180 + Math.floor(Math.random()*120);
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(count*3);
+      const vel = new Float32Array(count*3);
+      for(let i=0;i<count;i++){
+        pos[i*3+0]=center.x; pos[i*3+1]=center.y; pos[i*3+2]=center.z;
+        const ang = Math.random()*Math.PI*2;
+        const speed = 6 + Math.random()*8;
+        const vx = Math.cos(ang)*0.6*speed;
+        const vy = (Math.random()*1.6+0.8)*speed;
+        const vz = Math.sin(ang)*0.6*speed;
+        vel[i*3+0]=vx; vel[i*3+1]=vy; vel[i*3+2]=vz;
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      const start = performance.now()/1000;
+const mat = new THREE.ShaderMaterial({
+  uniforms:{
+    uTime:{value:0},
+    uStart:{value:start},
+    uSizeBase:{value:16},
+    uInnerColor:{value:new THREE.Color(0.92,0.88,0.78)},  // 暖浅色（中心）
+    uMidColor:{value:new THREE.Color(0.72,0.72,0.72)},    // 中性灰（中层）
+    uOuterColor:{value:new THREE.Color(0.48,0.48,0.52)}   // 深灰偏冷（外层）
+  },
+  vertexShader: smokeVertex,
+  fragmentShader: smokeFragment,
+  blending: THREE.NormalBlending,
+  transparent:true,
+  depthWrite:false
+});
+      const points = new THREE.Points(geo, mat);
+      scene.add(points);
+      this.smoke = {geo, mat, points, vel, born: performance.now()/1000};
+    }
+    updateSmoke(dt){
+      if(!this.smoke) return;
+      const pos = this.smoke.geo.attributes.position.array;
+      const vel = this.smoke.vel;
+      const n = vel.length/3;
+      const drag = 0.92;
+      for(let i=0;i<n;i++){
+        vel[i*3+1] += 0.6*dt; // 上升漂移
+        vel[i*3+0] *= drag; vel[i*3+1] *= drag; vel[i*3+2] *= drag;
+        pos[i*3+0] += vel[i*3+0]*dt;
+        pos[i*3+1] += vel[i*3+1]*dt;
+        pos[i*3+2] += vel[i*3+2]*dt;
+      }
+      this.smoke.geo.attributes.position.needsUpdate = true;
+      const life = Math.min(1, (performance.now()/1000 - this.smoke.born)/3.0);
+      if (this.smoke.mat.uniforms && this.smoke.mat.uniforms.uTime) { this.smoke.mat.uniforms.uTime.value = performance.now()/1000; }
+      if(life>=1){ scene.remove(this.smoke.points); this.smoke.geo.dispose(); this.smoke.mat.dispose(); this.smoke=null; }
+    }
+    dispose(){
+      if(this.explosion){
+        scene.remove(this.explosion.points);
+        this.explosion.geo.dispose();
+        this.explosion.mat.dispose();
+      }
+      if(this.secondary){
+        scene.remove(this.secondary.points);
+        this.secondary.geo.dispose();
+        this.secondary.mat.dispose();
+      }
+      if(this.smoke){
+        scene.remove(this.smoke.points);
+        this.smoke.geo.dispose();
+        this.smoke.mat.dispose();
+        this.smoke = null;
+      }
+    }
+    static randomDir(){
+      const u = Math.random();
+      const v = Math.random();
+      const theta = 2*Math.PI*u;
+      const phi = Math.acos(2*v-1);
+      return new THREE.Vector3(
+        Math.sin(phi)*Math.cos(theta),
+        Math.cos(phi),
+        Math.sin(phi)*Math.sin(theta)
+      );
+    }
+    static randomDirChrysanthemum(){
+      const theta = Math.random()*Math.PI*2;
+      const r = Math.sqrt(Math.random());
+      const y = (Math.random()*2-1)*0.6;
+      return new THREE.Vector3(
+        r*Math.cos(theta),
+        y,
+        r*Math.sin(theta)
+      ).normalize();
+    }
+  }
+
+  // 循环管理
+  let current = null;
+  function spawn(){
+    if(current){ current.dispose(); }
+    current = new Firework();
+    try{ if(window.__fwAudio) window.__fwAudio.playLaunch(current.rocket.position); }catch(e){}
+  }
+  // 移除初始化时的立即发射，避免未纳入更新循环的静态火箭残留
+  // spawn();
+
+  let paused = false;
+  window.addEventListener('dblclick', ()=>{ paused = !paused; });
+    // 音效引擎（首次交互后解锁，延迟初始化 + 多事件兼容 + 可变音色）
+   (function(){
+    function AudioEngine(){
+      this.ctx = null;
+      this.master = null;
+      this.unlocked = false;
+      this._beeped = false;
+      this.baseGain = 1.2;
+    }
+     AudioEngine.prototype.ensureContext = function(){
+       if(!this.ctx){
+         this.ctx = new (window.AudioContext||window.webkitAudioContext)();
+         this.master = this.ctx.createGain();
+         const volScale = Math.max(0, parseFloat(window.__volumeScale || 1.0));
+         this.master.gain.value = this.baseGain * volScale;
+         this.master.connect(this.ctx.destination);
+       }
+     };
+     AudioEngine.prototype.setMasterVolume = function(scale){
+       this.ensureContext();
+       const volScale = Math.max(0, parseFloat(scale || window.__volumeScale || 1.0));
+       window.__volumeScale = volScale;
+       if(this.master){
+         this.master.gain.value = this.baseGain * volScale;
+       }
+     };
+     AudioEngine.prototype.unlock = function(){
+       this.ensureContext();
+       try{
+         const p = this.ctx.resume();
+         if(p && typeof p.then==='function'){ p.then(()=>{}).catch(()=>{}); }
+       }catch(_){}
+       this.unlocked = true;
+       try{ if(window.__setAudioStatus) window.__setAudioStatus('已解锁'); }catch(_){}
+       if(!this._beeped){
+         this._beeped = true;
+         setTimeout(()=>{ this.testBeep(); }, 10);
+       }
+     };
+     AudioEngine.prototype.noiseBuffer = function(dur){
+       this.ensureContext();
+       dur = dur || 1.2;
+       const len = Math.floor(this.ctx.sampleRate * dur);
+       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+       const data = buf.getChannelData(0);
+       for(let i=0;i<len;i++){ data[i] = (Math.random()*2-1) * (1 - i/len); }
+       return buf;
+     };
+   
+     // 发射：随机调度（口哨/噗噗）
+     AudioEngine.prototype.playLaunch = function(pos){
+  if(!this.unlocked) return;
+  this.ensureContext();
+  // 随机出现“咻——！”（scream），否则为“噗噗推进”（fizz）
+  const p = Math.random();
+  const kind = p < 0.3 ? 'scream' : 'fizz';  // 约40%概率出现咻——，可按需调整
+  return this.playLaunchVariant(kind, pos);
+};
+     // 爆炸：随机调度（轰鸣/深重低音/噼啪/清脆砰）
+     AudioEngine.prototype.playExplosion = function(pos, arg){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const r = Math.random();
+       const kind = r<0.35?'boom' : r<0.6?'deepBoom' : r<0.85?'crackle':'pop';
+       let radius = null;
+       if(typeof arg === 'number') radius = arg;
+       else if(arg && typeof arg.radius === 'number') radius = arg.radius;
+       const mul = this.explosionGainForRadius(radius);
+       return this.playExplosionVariant(kind, pos, mul);
+     };
+     AudioEngine.prototype.explosionGainForRadius = function(r){
+       // 将“半径/速度”映射到增益系数，范围约0.5~1.5（可根据体验再调）
+       if(typeof r !== 'number' || !isFinite(r)) return 1.0;
+       const rn = Math.max(0, Math.min(1, (r - 28) / 40)); // 28~68 映射到 0~1
+       const mul = 0.5 + rn * 1.0; // 0.5~1.5
+       return Math.max(0.3, Math.min(2.0, mul));
+     };
+   
+     // 变体调度方法
+     AudioEngine.prototype.playLaunchVariant = function(kind, pos){
+       if(kind==='scream') return this.playLaunchScream(pos);
+       return this.playLaunchFizz(pos); // 默认噗噗
+     };
+     AudioEngine.prototype.playExplosionVariant = function(kind, pos, mul){
+       switch(kind){
+         case 'deepBoom': return this.playExplosionDeepBoom(pos, mul);
+         case 'boom': return this.playExplosionBoom(pos, mul);
+        //  case 'crackle': return this.playExplosionCrackle(pos, mul);
+         case 'pop': return this.playExplosionPop(pos, mul);
+         default: return this.playExplosionBoom(pos, mul);
+       }
+     };
+   
+     // 发射：啸叫 scream（清脆“咻——！”：锯齿主体 + 指数下滑 + 微抖与颤动 + 高Q带通 + 少量湍流噪声）
+     AudioEngine.prototype.playLaunchScream = function(pos){
+  if(!this.unlocked) return;
+  this.ensureContext();
+  const t = this.ctx.currentTime;
+
+  // 主振荡：双锯齿（微失谐）增强谐波厚度；高起点→指数下滑（贴合清脆“咻——！”与多普勒向下滑）
+  const osc1 = this.ctx.createOscillator(); osc1.type = 'sawtooth';
+  const osc2 = this.ctx.createOscillator(); osc2.type = 'sawtooth';
+  const startFreq = 4300 + Math.random()*500;     // 4.3–4.8 kHz
+  const endFreq   = 1250 + Math.random()*250;     // 1.25–1.5 kHz
+  osc1.frequency.setValueAtTime(startFreq, t);
+  osc1.frequency.exponentialRampToValueAtTime(endFreq, t + 1.08);
+  osc2.frequency.setValueAtTime(startFreq*1.01, t);            // 1% 失谐
+  osc2.frequency.exponentialRampToValueAtTime(endFreq*0.99, t + 1.08);
+
+  // 高频微抖 + 慢速颤动：撕裂空气的啸叫质感（幅度受控避免糊声）
+  const lfoFast = this.ctx.createOscillator(); lfoFast.type = 'sine';
+  lfoFast.frequency.setValueAtTime(32 + Math.random()*6, t);   // 32–38 Hz
+  const lfoFastGain = this.ctx.createGain(); lfoFastGain.gain.value = 5 + Math.random()*4;
+  lfoFast.connect(lfoFastGain).connect(osc1.frequency);
+  lfoFast.connect(lfoFastGain).connect(osc2.frequency);
+
+  const lfoSlow = this.ctx.createOscillator(); lfoSlow.type = 'triangle';
+  lfoSlow.frequency.setValueAtTime(2.2 + Math.random()*1.4, t); // 2.2–3.6 Hz
+  const lfoSlowGain = this.ctx.createGain(); lfoSlowGain.gain.value = 3 + Math.random()*3;
+  lfoSlow.connect(lfoSlowGain).connect(osc1.frequency);
+  lfoSlow.connect(lfoSlowGain).connect(osc2.frequency);
+
+  // 动态带通：中心随主频一起下滑，保证滑音过程清晰可听
+  const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass';
+  bp.Q.setValueAtTime(5.5 + Math.random()*2.0, t);             // 稍宽，避免过窄导致能量不足
+  bp.frequency.setValueAtTime(startFreq*0.6, t);
+  bp.frequency.exponentialRampToValueAtTime(endFreq*0.95, t + 1.08);
+
+  // 高通：尽量保留有效能量，避免过度削切
+  const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.setValueAtTime(120, t);
+
+  // 峰值EQ：提升2.2k附近亮度，强化清脆度
+  const peak = this.ctx.createBiquadFilter(); peak.type = 'peaking';
+  peak.frequency.setValueAtTime(2200, t); peak.Q.setValueAtTime(1.6, t); peak.gain.setValueAtTime(7.0, t);
+
+  // 少量空气湍流噪声（带通）叠加，增加“气”的质感（很小，不遮盖主峰）
+  const noise = this.ctx.createBufferSource(); noise.buffer = this.noiseBuffer(1.0);
+  const nbp = this.ctx.createBiquadFilter(); nbp.type = 'bandpass';
+  nbp.frequency.setValueAtTime(2600, t); nbp.Q.setValueAtTime(0.9, t);
+  const ng = this.ctx.createGain(); ng.gain.value = 0.02;
+
+  // 包络：极快攻击提升起音；适度保持后平滑释放
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(1.6, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+
+  // 软削波：提升响度与明亮度而不过度失真
+  const shaper = this.ctx.createWaveShaper();
+  const curve = new Float32Array(256);
+  for(let i=0;i<256;i++){
+    const x = (i/255)*2 - 1; // -1..1
+    curve[i] = Math.tanh(2.2 * x);      // 温和软削波
+  }
+  shaper.curve = curve;
+
+  // 预增益：显著提升发射阶段可听度
+  const preBoost = this.ctx.createGain(); preBoost.gain.value = 5.5;
+
+  // 声像：仅做左右定位，避免统一空间路由的高频衰减与湿声
+  const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+  if(pan){
+    const px = (pos && typeof pos.x === 'number') ? pos.x : 0;
+    pan.pan.value = Math.max(-1, Math.min(1, px/60));
+  }
+
+  // 混合总线
+  const mix = this.ctx.createGain();
+  osc1.connect(bp); osc2.connect(bp);
+  bp.connect(peak).connect(hp).connect(g).connect(shaper).connect(mix);
+  noise.connect(nbp).connect(ng).connect(mix);
+  mix.connect(preBoost);
+  if(pan){ preBoost.connect(pan).connect(this.master); } else { preBoost.connect(this.master); }
+
+  try{
+    osc1.start(t + 0.003);
+    osc2.start(t + 0.003);
+    lfoFast.start(t + 0.003);
+    lfoSlow.start(t + 0.003);
+    noise.start(t + 0.003);
+
+    osc1.stop(t + 1.15);
+    osc2.stop(t + 1.15);
+    lfoFast.stop(t + 1.15);
+    lfoSlow.stop(t + 1.15);
+    noise.stop(t + 1.11);
+  }catch(_){}
+};
+     // 发射：噗噗（噪声推进）
+     AudioEngine.prototype.playLaunchFizz = function(pos){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const t = this.ctx.currentTime;
+       const src = this.ctx.createBufferSource();
+       src.buffer = this.noiseBuffer(0.6);
+       const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900 + Math.random()*900;
+       const g = this.ctx.createGain();
+       g.gain.setValueAtTime(0, t);
+       g.gain.linearRampToValueAtTime(0.6, t+0.08);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+0.6);
+       const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+       if(pan) pan.pan.value = Math.max(-1, Math.min(1, (pos?.x||0)/60));
+       src.connect(bp); bp.connect(g);
+       if(pan){ g.connect(pan); pan.connect(this.master); } else { g.connect(this.master); }
+       try{ src.start(t+0.01); }catch(_){}
+     };
+   
+     // 爆炸：标准轰鸣（噪声 + 低频下滑）
+     AudioEngine.prototype.playExplosionBoom = function(pos, mul){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const M = (typeof mul==='number' && isFinite(mul)) ? Math.max(0.3, Math.min(2.0, mul)) : 1.0;
+       const t = this.ctx.currentTime;
+       const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(1.0);
+       const lp = this.ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 2400 + Math.random()*1800;
+       const g = this.ctx.createGain();
+       const bass = this.ctx.createOscillator();
+       const bassGain = this.ctx.createGain();
+       bass.type='sine';
+       const startF = 120 + Math.random()*40;
+       const endF = 40 + Math.random()*20;
+       bass.frequency.setValueAtTime(startF, t);
+       bass.frequency.exponentialRampToValueAtTime(endF, t+0.7);
+       bassGain.gain.setValueAtTime(0.001, t);
+       bassGain.gain.exponentialRampToValueAtTime(0.5 * M, t+0.03);
+       bassGain.gain.exponentialRampToValueAtTime(0.0001, t+0.8);
+       g.gain.setValueAtTime(0.9 * M, t);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+1.0);
+       const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+       src.connect(lp).connect(g);
+       bass.connect(bassGain);
+       if(pan){ g.connect(pan); bassGain.connect(pan); pan.pan.value = Math.max(-1, Math.min(1, (pos?.x||0)/60)); pan.connect(this.master); }
+       else { g.connect(this.master); bassGain.connect(this.master); }
+       try{ src.start(t+0.01); bass.start(t+0.01); bass.stop(t+0.85); src.stop(t+1.05);}catch(_){}
+     };
+     // 爆炸：更深重低音
+     AudioEngine.prototype.playExplosionDeepBoom = function(pos, mul){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const M = (typeof mul==='number' && isFinite(mul)) ? Math.max(0.3, Math.min(2.0, mul)) : 1.0;
+       const t = this.ctx.currentTime;
+       const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(1.2);
+       const lp = this.ctx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 2000 + Math.random()*1200;
+       const g = this.ctx.createGain();
+       const bass = this.ctx.createOscillator();
+       const bassGain = this.ctx.createGain();
+       bass.type='sine';
+       const startF = 90 + Math.random()*20;
+       const endF = 25 + Math.random()*10;
+       bass.frequency.setValueAtTime(startF, t);
+       bass.frequency.exponentialRampToValueAtTime(endF, t+0.9);
+       bassGain.gain.setValueAtTime(0.001, t);
+       bassGain.gain.exponentialRampToValueAtTime(0.7 * M, t+0.04);
+       bassGain.gain.exponentialRampToValueAtTime(0.0001, t+1.2);
+       g.gain.setValueAtTime(0.9 * M, t);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+1.2);
+       const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+       src.connect(lp).connect(g);
+       bass.connect(bassGain);
+       if(pan){ g.connect(pan); bassGain.connect(pan); pan.pan.value = Math.max(-1, Math.min(1, (pos?.x||0)/60)); pan.connect(this.master); }
+       else { g.connect(this.master); bassGain.connect(this.master); }
+       try{ src.start(t+0.01); bass.start(t+0.01); bass.stop(t+1.25); src.stop(t+1.25);}catch(_){}
+     };
+     // 爆炸：噼啪（大量短促脉冲）
+     AudioEngine.prototype.playExplosionCrackle = function(pos, mul){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const M = (typeof mul==='number' && isFinite(mul)) ? Math.max(0.3, Math.min(2.0, mul)) : 1.0;
+       const t = this.ctx.currentTime;
+       const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+       const parent = pan ? pan : this.master;
+       if(pan){ pan.pan.value = Math.max(-1, Math.min(1, (pos?.x||0)/60)); pan.connect(this.master); }
+       const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(0.9);
+       const hp = this.ctx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = 1200;
+       const g = this.ctx.createGain();
+       g.gain.setValueAtTime(0.6 * M, t);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+0.8);
+       src.connect(hp).connect(g).connect(parent);
+       try{ src.start(t+0.01); src.stop(t+0.85);}catch(_){}
+       const clicks = 10 + Math.floor(Math.random()*8);
+       for(let k=0;k<clicks;k++){
+         const tt = t + 0.05 + Math.random()*0.5;
+         const click = this.ctx.createOscillator();
+         const cg = this.ctx.createGain();
+         click.type='triangle';
+         click.frequency.setValueAtTime(600+Math.random()*1200, tt);
+         cg.gain.setValueAtTime(0.0001, tt);
+         cg.gain.exponentialRampToValueAtTime(0.3 * M, tt+0.01);
+         cg.gain.exponentialRampToValueAtTime(0.0001, tt+0.12);
+         click.connect(cg).connect(parent);
+         try{ click.start(tt); click.stop(tt+0.13);}catch(_){}
+       }
+     };
+     // 爆炸：清脆“砰”
+     AudioEngine.prototype.playExplosionPop = function(pos, mul){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const M = (typeof mul==='number' && isFinite(mul)) ? Math.max(0.3, Math.min(2.0, mul)) : 1.0;
+       const t = this.ctx.currentTime;
+       const src = this.ctx.createBufferSource(); src.buffer = this.noiseBuffer(0.4);
+       const bp = this.ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value = 1800;
+       const g = this.ctx.createGain();
+       g.gain.setValueAtTime(0.9 * M, t);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+0.4);
+       const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+       src.connect(bp).connect(g);
+       if(pan){ g.connect(pan); pan.pan.value = Math.max(-1, Math.min(1, (pos?.x||0)/60)); pan.connect(this.master); } else { g.connect(this.master); }
+       try{ src.start(t+0.01); src.stop(t+0.45);}catch(_){}
+     };
+   
+     AudioEngine.prototype.testBeep = function(){
+       if(!this.unlocked) return;
+       this.ensureContext();
+       const t = this.ctx.currentTime;
+       const osc = this.ctx.createOscillator();
+       const g = this.ctx.createGain();
+       osc.type='sine';
+       osc.frequency.setValueAtTime(660, t);
+       g.gain.setValueAtTime(0, t);
+       g.gain.linearRampToValueAtTime(0.25, t+0.01);
+       g.gain.exponentialRampToValueAtTime(0.0001, t+0.3);
+       osc.connect(g).connect(this.master);
+       try{ osc.start(t+0.01); osc.stop(t+0.32); }catch(_){}
+     };
+     window.__fwAudio = new AudioEngine();
+     // 覆盖层添加“音量”滑杆（全局音量）
+     (function(){
+       const overlay = document.getElementById('overlay');
+       if(!overlay) return;
+       window.__volumeScale = window.__volumeScale || 1.0;
+       const wrap = document.createElement('span');
+       wrap.style.marginLeft = '10px';
+       const label = document.createElement('b');
+       label.textContent = '音量';
+       label.style.marginRight = '6px';
+       const input = document.createElement('input');
+       input.type = 'range';
+       input.min = '0';
+       input.max = '2';
+       input.step = '0.01';
+       input.value = String(window.__volumeScale);
+       input.style.verticalAlign = 'middle';
+       const val = document.createElement('span');
+       val.style.marginLeft = '6px';
+       val.textContent = String(window.__volumeScale);
+       input.addEventListener('input', ()=>{
+         const s = parseFloat(input.value)||1.0;
+         window.__volumeScale = s;
+         try{ if(window.__fwAudio) window.__fwAudio.setMasterVolume(s); }catch(_){}
+         val.textContent = input.value;
+       });
+       wrap.appendChild(label);
+       wrap.appendChild(input);
+       wrap.appendChild(val);
+       overlay.appendChild(wrap);
+       try{ if(window.__fwAudio) window.__fwAudio.setMasterVolume(window.__volumeScale); }catch(_){}
+     })();
+   })();
+
+ // 首次交互解锁音频 + 多事件兼容与状态提示
+(function(){
+  const unlock = ()=>{ try{ if(window.__fwAudio) window.__fwAudio.unlock(); }catch(_){} };
+  window.addEventListener('click', unlock, {passive:true});
+  window.addEventListener('touchstart', unlock, {passive:true});
+  window.addEventListener('pointerdown', unlock, {passive:true});
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState==='visible'){
+      try{
+        const a = window.__fwAudio;
+        if(a && a.unlocked && a.ctx && a.ctx.state==='suspended'){ a.ctx.resume(); }
+      }catch(_){}
+    }
+  });
+  // 覆盖层音频状态提示
+  const overlayEl = document.getElementById('overlay');
+  window.__setAudioStatus = function(text){
+    if(!overlayEl) return;
+    let node = overlayEl.querySelector('#audioStatus');
+    if(!node){
+      node = document.createElement('span');
+      node.id = 'audioStatus';
+      node.style.marginLeft = '8px';
+      node.innerHTML = '<b>音频：</b>'+text;
+      overlayEl.appendChild(node);
+    } else {
+      node.innerHTML = '<b>音频：</b>'+text;
+    }
+  };
+  try{ window.__setAudioStatus('未解锁'); }catch(_){}
+})();
+
+// 空格触发：生成新烟花并播放发射音效
+window.addEventListener('keydown', (e)=>{
+  if(window.__fwAudio) window.__fwAudio.unlock();
+  if(e.code==='Space'){
+    const now = performance.now()/1000;
+    window.__fwList = window.__fwList || [];
+    window.__nextAutoSpawnAt = (window.__nextAutoSpawnAt || now);
+    // 手动触发同样遵守“最多3个、间隔≥1s”
+    if (now >= window.__nextAutoSpawnAt && window.__fwList.length < 3) {
+      const fw = new Firework();
+      window.__fwList.push(fw);
+      try{ if(window.__fwAudio) window.__fwAudio.playLaunch(fw.rocket.position); }catch(e){}
+      current = fw;
+      window.__nextAutoSpawnAt = now + 1.0;
+    }
+  }
+});
+
+  // 动画主循环
+  let last = performance.now()/1000;
+  function animate(){
+    const now = performance.now()/1000;
+    const dt = Math.min(0.033, Math.max(0.001, now-last));
+    last = now;
+    if(!paused){
+      // 多烟花并发（最多3个），自动间隔≥1s（修复转义符导致的语法问题）
+      window.__fwList = window.__fwList || [];
+      window.__nextAutoSpawnAt = (window.__nextAutoSpawnAt || now + 1.2);
+
+      if (now >= window.__nextAutoSpawnAt && 3 > window.__fwList.length) {
+        const fw = new Firework();
+        window.__fwList.push(fw);
+        // 兼容既有音频逻辑
+        try { if (window.__fwAudio) window.__fwAudio.playLaunch(fw.rocket.position); } catch(e) {}
+        // 更新 current 为最后一个，保证空格触发音效兼容
+        current = fw;
+        // 下次自动生成时间（至少1秒）
+        window.__nextAutoSpawnAt = now + (1.0 + Math.random()*1.0);
+      }
+
+      // 驱动所有烟花
+      for (let i = window.__fwList.length - 1; i >= 0; i--) {
+        const fw = window.__fwList[i];
+        const alive = fw.update(dt);
+        if (fw.explosion) {
+          fw.explosion.mat.uniforms.uTime.value = now - fw.explosionStart;
+        }
+        if (fw.secondary) {
+          fw.secondary.mat.uniforms.uTime.value = now - fw.secondary.start;
+          const t2 = now - fw.secondary.start;
+          if (t2 > fw.secondary.dur) {
+            scene.remove(fw.secondary.points);
+            fw.secondary.geo.dispose();
+            fw.secondary.mat.dispose();
+            fw.secondary = null;
+          }
+        }
+        if (!alive) {
+          fw.dispose();
+          window.__fwList.splice(i, 1);
+        }
+      }
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+  }
+  animate();
+
+  // 自适应
+  window.addEventListener('resize', ()=>{
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+})();
+</script>
+</body>
+</html>
